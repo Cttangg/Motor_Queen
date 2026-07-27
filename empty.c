@@ -1,12 +1,15 @@
 /*
  * ttc2 最小迁移验证
  * - UART: ttc2 原生 DMA TX + ISR RX
- * - 灰度传感器: Track_Tracking_Car 迁移 (GPIO 引脚待 SysConfig 配置)
+ * - 灰度传感器: Track_Tracking_Car 迁移
+ * - 陀螺仪: Track_Tracking_Car 迁移 (I2C 待 SysConfig 配置)
  */
 
 #include "ti_msp_dl_config.h"
 #include "./Drivers/uart.h"
 #include "./Drivers/grayscale.h"
+#include "./Drivers/mpu6500.h"
+#include "./Drivers/filter.h"
 
 /* 后续迁移时取消注释:
 #include "./Drivers/motor_control.h"
@@ -14,21 +17,19 @@
 #include "./Drivers/steering.h"
 #include "./Drivers/line_pid.h"
 #include "./Drivers/gyro_pid.h"
-#include "./Drivers/mpu6500.h"
-#include "./Drivers/filter.h"
 */
 
 #include <stdio.h>
 #include <string.h>
-/* #include <math.h> */
+#include <math.h>
 
 #define CMD_BUF_SIZE      64
 #define UART_TX_DELAY     160000
 
 /* ==================================================================
- * 后续迁移: IMU / 滤波器 / 动态漂移变量组 (暂注释)
+ * IMU 姿态解算变量组
  * ================================================================== */
-#if 0
+
 typedef struct {
     float roll;
     float pitch;
@@ -38,7 +39,8 @@ typedef struct {
 volatile IMU_Attitude g_myCarAngle = {0.0f, 0.0f, 0.0f};
 volatile bool g_is_calibrated = false;
 volatile float g_yaw_rate = 0.0f;
-static volatile int g_imu_ready = 0;
+
+#define SAMPLE_DT  0.01f
 
 BiquadFilter xFilter, yFilter;
 KalmanFilter2D kfX, kfY;
@@ -47,7 +49,68 @@ float gyro_z_offset = 0.0f;
 float yaw_drift_rate = 0.0f;
 uint32_t total_cycles_since_reset = 0;
 uint32_t stationary_cycles = 0;
-#endif
+
+#define YAW_RESET_INTERVAL_CYCLES  3000
+#define STATIONARY_THRESHOLD_CYCLES 300
+
+/* ------------------------------------------------------------------
+ * IMU 姿态更新 (100Hz 调用)
+ * ------------------------------------------------------------------ */
+static bool IMU_UpdateAttitude(volatile IMU_Attitude *attitude)
+{
+    MPU6500_IMUData imuData;
+    if (!MPU6500_ReadIMU(&imuData)) return false;
+
+    float accAngleX = atan2f(imuData.accel_y, imuData.accel_z) * 57.29578f;
+    float accAngleY = atan2f(-imuData.accel_x,
+        sqrtf(imuData.accel_y * imuData.accel_y +
+              imuData.accel_z * imuData.accel_z)) * 57.29578f;
+
+    float lowpassAccX = Biquad_Process(&xFilter, accAngleX);
+    float lowpassAccY = Biquad_Process(&yFilter, accAngleY);
+
+    Kalman2D_Predict(&kfX);
+    Kalman2D_Predict(&kfY);
+    Kalman2D_Update(&kfX, lowpassAccX, imuData.gyro_x);
+    Kalman2D_Update(&kfY, lowpassAccY, imuData.gyro_y);
+
+    attitude->roll  = kfX.x[0];
+    attitude->pitch = kfY.x[0];
+
+    float corrected_gyro_z = imuData.gyro_z - gyro_z_offset;
+    bool is_stationary = (fabsf(imuData.gyro_x) < 1.5f) &&
+                         (fabsf(imuData.gyro_y) < 1.5f) &&
+                         (fabsf(corrected_gyro_z) < 1.5f);
+
+    total_cycles_since_reset++;
+    if (is_stationary) {
+        stationary_cycles++;
+        if (total_cycles_since_reset >= YAW_RESET_INTERVAL_CYCLES &&
+            stationary_cycles >= STATIONARY_THRESHOLD_CYCLES) {
+            float elapsed_time = total_cycles_since_reset * SAMPLE_DT;
+            yaw_drift_rate = raw_angle_z / elapsed_time;
+            if (fabsf(yaw_drift_rate) < 0.1f) {
+                raw_angle_z = 0.0f;
+                total_cycles_since_reset = 0;
+                stationary_cycles = 0;
+            }
+        }
+    } else {
+        stationary_cycles = 0;
+    }
+
+    float final_gyro_z_rate = corrected_gyro_z - yaw_drift_rate;
+    if (fabsf(final_gyro_z_rate) < 0.3f) final_gyro_z_rate = 0.0f;
+
+    g_yaw_rate = final_gyro_z_rate;
+    raw_angle_z += final_gyro_z_rate * SAMPLE_DT;
+
+    while (raw_angle_z >= 180.0f) raw_angle_z -= 360.0f;
+    while (raw_angle_z < -180.0f) raw_angle_z += 360.0f;
+
+    attitude->yaw = raw_angle_z;
+    return true;
+}
 
 /* ==================== UART 数据上报 ==================== */
 
@@ -69,7 +132,7 @@ static void firewater_send(void)
 
 static void cmd_show(void)
 {
-    UART_Puts(&g_uart0, "ttc2 CMD: ? gs udbg\r\n");
+    UART_Puts(&g_uart0, "ttc2 CMD: ? gs imu udbg\r\n");
 }
 
 static void cmd_do(const char *line)
@@ -92,6 +155,18 @@ static void cmd_do(const char *line)
         return;
     }
     if (!strcmp(k, "udbg")) { UART_DumpDebug(&g_uart0); return; }
+
+    if (!strcmp(k, "imu")) {
+        if (!g_is_calibrated) {
+            UART_Puts(&g_uart0, "IMU not calibrated\r\n");
+            return;
+        }
+        IMU_UpdateAttitude(&g_myCarAngle);
+        UART_Printf(&g_uart0,
+            "Roll: %.2f  Pitch: %.2f  Yaw: %.2f deg  YawRate: %.2f deg/s\r\n",
+            g_myCarAngle.roll, g_myCarAngle.pitch, g_myCarAngle.yaw, g_yaw_rate);
+        return;
+    }
 
     /* ============ 后续迁移: 电机 / 轨迹 / PID 命令 (暂注释) ============ */
 #if 0
@@ -215,10 +290,41 @@ int main(void)
 
     Grayscale_Init();
 
-    /* 后续迁移: IMU / 电机 / 轨迹 初始化 (暂注释)
+    /* ---- IMU 初始化 ---- */
     NVIC_SetPriority(I2C_GYRO_INST_INT_IRQN, 0);
     NVIC_EnableIRQ(I2C_GYRO_INST_INT_IRQN);
     DL_SYSCTL_disableSleepOnExit();
+
+    if (MPU6500_Init()) {
+        /* ---- 滤波器初始化 ---- */
+        Biquad_Init(&xFilter, 0.0133592f, 0.0267184f, 0.0133592f,
+                    1.0f, -1.64745998f, 0.70089678f);
+        Biquad_Init(&yFilter, 0.0133592f, 0.0267184f, 0.0133592f,
+                    1.0f, -1.64745998f, 0.70089678f);
+        Kalman2D_Init(&kfX, SAMPLE_DT);
+        Kalman2D_Init(&kfY, SAMPLE_DT);
+
+        /* ---- Z 轴陀螺仪零偏校准 (保持静止) ---- */
+        UART_Puts(&g_uart0, "Calibrating Z-Gyro, KEEP STILL...\r\n");
+        float gyro_z_sum = 0.0f;
+        int valid_samples = 0;
+        while (valid_samples < 200) {
+            MPU6500_IMUData calData;
+            if (MPU6500_ReadIMU(&calData)) {
+                gyro_z_sum += calData.gyro_z;
+                valid_samples++;
+            }
+            delay_cycles(320000);
+        }
+        gyro_z_offset = gyro_z_sum / 200.0f;
+        g_is_calibrated = true;
+        UART_Printf(&g_uart0, "Gyro Offset: %.4f deg/s. MPU6500 OK\r\n",
+                    gyro_z_offset);
+    } else {
+        UART_Puts(&g_uart0, "MPU6500 FAIL\r\n");
+    }
+
+    /* 后续迁移: 电机 / 轨迹 初始化 (暂注释)
     Biquad_Init(&xFilter, ...);
     Kalman2D_Init(&kfX, SAMPLE_DT);
     motor_control_init(1, 0.01f, 2.0f, 10.0f, 0.0f);
@@ -228,7 +334,6 @@ int main(void)
     Steering_Init();
     trajectory_set_feedback(Steering_GetCorrection);
     trajectory_enable_closed_loop(1);
-    MPU6500_Init();
     */
 
     UART_Puts(&g_uart0, "ttc2 ready\r\n");
