@@ -9,8 +9,6 @@ uint8_t Grayscale_Read(void)
 {
     uint8_t result = 0;
 
-    /* TODO: 待 SysConfig 配置 GPIO_SENSOR 引脚后启用 */
-#if 0
     if (DL_GPIO_readPins(GPIO_SENSOR_PIN_0_PORT, GPIO_SENSOR_PIN_0_PIN))
         result |= (1 << 0);
     if (DL_GPIO_readPins(GPIO_SENSOR_PIN_1_PORT, GPIO_SENSOR_PIN_1_PIN))
@@ -27,7 +25,6 @@ uint8_t Grayscale_Read(void)
         result |= (1 << 6);
     if (DL_GPIO_readPins(GPIO_SENSOR_PIN_7_PORT, GPIO_SENSOR_PIN_7_PIN))
         result |= (1 << 7);
-#endif
 
     return result;
 }

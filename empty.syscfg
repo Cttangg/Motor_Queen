@@ -1,9 +1,9 @@
 /**
  * These arguments were used when this file was generated. They will be automatically applied on subsequent loads
  * via the GUI or CLI. Run CLI with '--help' for additional information on how to override these arguments.
- * @cliArgs --device "MSPM0G350X" --part "Default" --package "LQFP-64(PM)" --product "mspm0_sdk@2.10.00.04"
- * @v2CliArgs --device "MSPM0G3507" --package "LQFP-64(PM)" --product "mspm0_sdk@2.10.00.04"
- * @versions {"tool":"1.27.0+4565"}
+ * @cliArgs --device "MSPM0G350X" --part "Default" --package "LQFP-64(PM)" --product "mspm0_sdk@2.11.00.07"
+ * @v2CliArgs --device "MSPM0G3507" --package "LQFP-64(PM)" --product "mspm0_sdk@2.11.00.07"
+ * @versions {"tool":"1.26.2+4477"}
  */
 
 /**
@@ -18,15 +18,32 @@ const UART1  = UART.addInstance();
 /**
  * Write custom configuration values to the imported modules.
  */
-GPIO1.$name                          = "GPIO_LEDS";
-GPIO1.associatedPins.create(2);
-GPIO1.associatedPins[0].$name        = "USER_LED_1";
-GPIO1.associatedPins[0].initialValue = "SET";
-GPIO1.associatedPins[0].pin.$assign  = "PA7";
-GPIO1.associatedPins[1].$name        = "USER_TEST";
-GPIO1.associatedPins[1].assignedPort = "PORTA";
-GPIO1.associatedPins[1].assignedPin  = "15";
-GPIO1.associatedPins[1].initialValue = "SET";
+GPIO1.$name                         = "GPIO_SENSOR";
+GPIO1.associatedPins.create(8);
+GPIO1.associatedPins[0].$name       = "PIN_0";
+GPIO1.associatedPins[0].direction   = "INPUT";
+GPIO1.associatedPins[0].pin.$assign = "PA25";
+GPIO1.associatedPins[1].$name       = "PIN_1";
+GPIO1.associatedPins[1].direction   = "INPUT";
+GPIO1.associatedPins[1].pin.$assign = "PB25";
+GPIO1.associatedPins[2].$name       = "PIN_2";
+GPIO1.associatedPins[2].direction   = "INPUT";
+GPIO1.associatedPins[2].pin.$assign = "PB20";
+GPIO1.associatedPins[3].$name       = "PIN_3";
+GPIO1.associatedPins[3].direction   = "INPUT";
+GPIO1.associatedPins[3].pin.$assign = "PA14";
+GPIO1.associatedPins[4].$name       = "PIN_4";
+GPIO1.associatedPins[4].direction   = "INPUT";
+GPIO1.associatedPins[4].pin.$assign = "PA24";
+GPIO1.associatedPins[5].$name       = "PIN_5";
+GPIO1.associatedPins[5].direction   = "INPUT";
+GPIO1.associatedPins[5].pin.$assign = "PB24";
+GPIO1.associatedPins[6].$name       = "PIN_6";
+GPIO1.associatedPins[6].direction   = "INPUT";
+GPIO1.associatedPins[6].pin.$assign = "PA22";
+GPIO1.associatedPins[7].$name       = "PIN_7";
+GPIO1.associatedPins[7].direction   = "INPUT";
+GPIO1.associatedPins[7].pin.$assign = "PA15";
 
 const Board = scripting.addModule("/ti/driverlib/Board", {}, false);
 
@@ -37,11 +54,8 @@ UART1.$name                             = "UART_0";
 UART1.enableFIFO                        = true;
 UART1.rxFifoThreshold                   = "DL_UART_RX_FIFO_LEVEL_ONE_ENTRY";
 UART1.enableDMARX                       = false;
-UART1.targetBaudRate                    = 9600;
-UART1.enableInternalLoopback            = false;
 UART1.txFifoThreshold                   = "DL_UART_TX_FIFO_LEVEL_ONE_ENTRY";
 UART1.enabledDMATXTriggers              = "DL_UART_DMA_INTERRUPT_TX";
-UART1.enableDMATX                       = true;
 UART1.enabledInterrupts                 = ["DMA_DONE_TX","EOT_DONE","RX"];
 UART1.peripheral.$assign                = "UART0";
 UART1.peripheral.rxPin.$assign          = "PA11";
@@ -59,7 +73,6 @@ UART1.DMA_CHANNEL_TX.peripheral.$assign = "DMA_CH0";
  * version of the tool will not impact the pinmux you originally saw.  These lines can be completely deleted in order to
  * re-solve from scratch.
  */
-GPIO1.associatedPins[1].pin.$suggestSolution = "PA15";
-Board.peripheral.$suggestSolution            = "DEBUGSS";
-Board.peripheral.swclkPin.$suggestSolution   = "PA20";
-Board.peripheral.swdioPin.$suggestSolution   = "PA19";
+Board.peripheral.$suggestSolution          = "DEBUGSS";
+Board.peripheral.swclkPin.$suggestSolution = "PA20";
+Board.peripheral.swdioPin.$suggestSolution = "PA19";
