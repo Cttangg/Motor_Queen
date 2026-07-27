@@ -10,9 +10,9 @@
 #include "./Drivers/grayscale.h"
 #include "./Drivers/mpu6500.h"
 #include "./Drivers/filter.h"
+#include "./Drivers/motor_control.h"
 
 /* 后续迁移时取消注释:
-#include "./Drivers/motor_control.h"
 #include "./Drivers/trajectory.h"
 #include "./Drivers/steering.h"
 #include "./Drivers/line_pid.h"
@@ -39,6 +39,9 @@ typedef struct {
 volatile IMU_Attitude g_myCarAngle = {0.0f, 0.0f, 0.0f};
 volatile bool g_is_calibrated = false;
 volatile float g_yaw_rate = 0.0f;
+static volatile int g_fw_ready  = 0;
+static volatile int g_fw_div    = 0;
+static volatile int g_fw_stream = 1;
 
 #define SAMPLE_DT  0.01f
 
@@ -116,23 +119,38 @@ static bool IMU_UpdateAttitude(volatile IMU_Attitude *attitude)
 
 static void firewater_send(void)
 {
-    uint8_t sensor = Grayscale_Read();
-    char b[32];
-    int n = sprintf(b, "GS=0x%02X ", sensor);
-    if (n > 0) UART_Puts(&g_uart0, b);
-    Grayscale_PrintBinary8(sensor);
+    static char b[160];
 
-    /* 后续迁移: 加入电机/IMU 数据上报
-    motor_control_get_target_rpm(1), ...
-    g_myCarAngle.roll, g_myCarAngle.pitch, g_myCarAngle.yaw
-    */
+    int n = sprintf(b, "%d,%d,%d,%d,%d,%d,%d,%d,%.2f,%.2f,%.2f,",
+        (int)motor_control_get_target_rpm(1),
+        (int)motor_control_get_actual_rpm(1),
+        (int)motor_control_get_duty(1),
+        (int)motor_control_get_freq(1),
+        (int)motor_control_get_target_rpm(2),
+        (int)motor_control_get_actual_rpm(2),
+        (int)motor_control_get_duty(2),
+        (int)motor_control_get_freq(2),
+        g_myCarAngle.roll,
+        g_myCarAngle.pitch,
+        g_myCarAngle.yaw);
+
+    if (n > 0) UART_Puts(&g_uart0, b);
+
+    uint8_t sensor = Grayscale_Read();
+    char sbits[11];
+    for (int i = 7; i >= 0; i--)
+        sbits[7 - i] = (sensor & (1 << i)) ? '1' : '0';
+    sbits[8]  = '\r';
+    sbits[9]  = '\n';
+    sbits[10] = '\0';
+    UART_Puts(&g_uart0, sbits);
 }
 
 /* ==================== 命令解析 ==================== */
 
 static void cmd_show(void)
 {
-    UART_Puts(&g_uart0, "ttc2 CMD: ? gs imu udbg\r\n");
+    UART_Puts(&g_uart0, "ttc2 CMD: ? gs imu udbg fw stop Tr Tr1/2 Dd Kp1/2\r\n");
 }
 
 static void cmd_do(const char *line)
@@ -168,37 +186,12 @@ static void cmd_do(const char *line)
         return;
     }
 
-    /* ============ 后续迁移: 电机 / 轨迹 / PID 命令 (暂注释) ============ */
-#if 0
-    if (!strcmp(k, "stop_all")) { trajectory_stop(); UART_Puts(&g_uart0, "OK all stopped\r\n"); return; }
-    if (!strcmp(k, "imu")) {
-        UART_Printf(&g_uart0, "Roll: %.2f deg, Pitch: %.2f deg, Yaw: %.2f deg, YawRate: %.2f deg/s\r\n",
-            g_myCarAngle.roll, g_myCarAngle.pitch, g_myCarAngle.yaw, g_yaw_rate);
+    if (!strcmp(k, "fw")) {
+        g_fw_stream = !g_fw_stream;
+        UART_Printf(&g_uart0, "Stream %s\r\n", g_fw_stream ? "ON" : "OFF");
         return;
     }
-    if (sscanf(line, "%*s %f", &v1) >= 1) {
-        if (!strcmp(k, "Lp")) { LinePID_SetKp(v1); UART_Printf(&g_uart0, "OK Lp=%.3f\r\n", v1); return; }
-        if (!strcmp(k, "Li")) { LinePID_SetKi(v1); UART_Printf(&g_uart0, "OK Li=%.3f\r\n", v1); return; }
-        if (!strcmp(k, "Ld")) { LinePID_SetKd(v1); UART_Printf(&g_uart0, "OK Ld=%.3f\r\n", v1); return; }
-        if (!strcmp(k, "Gp")) { GyroPID_SetKp(v1); UART_Printf(&g_uart0, "OK Gp=%.3f\r\n", v1); return; }
-        if (!strcmp(k, "Gi")) { GyroPID_SetKi(v1); UART_Printf(&g_uart0, "OK Gi=%.3f\r\n", v1); return; }
-        if (!strcmp(k, "Gd")) { GyroPID_SetKd(v1); UART_Printf(&g_uart0, "OK Gd=%.3f\r\n", v1); return; }
-    }
-    if (!strcmp(k, "mode")) {
-        int m;
-        if (sscanf(line, "mode %d", &m) == 1) {
-            Steering_SetMode((uint8_t)m);
-            UART_Printf(&g_uart0, "OK mode %s\r\n", m==0?"A(line)":"B(gyro)");
-        } else UART_Puts(&g_uart0, "ERR: mode 0(A/line) or 1(B/gyro)\r\n");
-        return;
-    }
-    if (!strcmp(k, "st")) {
-        if (sscanf(line, "st %f %f", &v1, &v2) == 2) {
-            trajectory_straight(v1, v2);
-            UART_Printf(&g_uart0, "OK st d=%.2f v=%.2f\r\n", v1, v2);
-        } else UART_Puts(&g_uart0, "ERR: st <dist_m> <speed_mps>\r\n");
-        return;
-    }
+
     if (!strcmp(k, "stop")) {
         motor_control_stop(1); motor_control_stop(2);
         UART_Puts(&g_uart0, "OK both stopped\r\n"); return;
@@ -211,7 +204,16 @@ static void cmd_do(const char *line)
         } else UART_Puts(&g_uart0, "ERR: Tr <rpm>\r\n");
         return;
     }
-    /* 单电机命令解析 */
+    if (!strcmp(k, "Dd")) {
+        if (sscanf(line, "Dd %f", &v1) == 1) {
+            motor_control_set_duty(1, (uint32_t)v1);
+            motor_control_set_duty(2, (uint32_t)v1);
+            UART_Printf(&g_uart0, "OK both Dd=%d\r\n", (int)v1);
+        } else UART_Puts(&g_uart0, "ERR: Dd <duty>\r\n");
+        return;
+    }
+
+    /* 单电机命令解析 (Tr1/Tr2, Kp1/Kp2, Dd1/Dd2, stop1/stop2) */
     {
         int len = (int)strlen(k);
         int id = 0;
@@ -237,10 +239,41 @@ static void cmd_do(const char *line)
         } else if (!strcmp(k, "Kd")) {
             motor_control_set_kd((uint8_t)id, v);
             UART_Printf(&g_uart0, "OK M%d Kd=%.3f\r\n", id, v);
+        } else if (!strcmp(k, "Dd")) {
+            motor_control_set_duty((uint8_t)id, (uint32_t)v);
+            UART_Printf(&g_uart0, "OK M%d Dd=%d\r\n", id, (int)v);
         } else if (!strcmp(k, "stop")) {
             motor_control_stop((uint8_t)id);
             UART_Printf(&g_uart0, "OK M%d stopped\r\n", id);
         } else { UART_Printf(&g_uart0, "ERR: %s\r\n", k); }
+        return;
+    }
+
+    /* ============ 后续迁移: 轨迹 / 转向 / PID 命令 (暂注释) ============ */
+#if 0
+    if (!strcmp(k, "stop_all")) { trajectory_stop(); UART_Puts(&g_uart0, "OK all stopped\r\n"); return; }
+    if (sscanf(line, "%*s %f", &v1) >= 1) {
+        if (!strcmp(k, "Lp")) { LinePID_SetKp(v1); UART_Printf(&g_uart0, "OK Lp=%.3f\r\n", v1); return; }
+        if (!strcmp(k, "Li")) { LinePID_SetKi(v1); UART_Printf(&g_uart0, "OK Li=%.3f\r\n", v1); return; }
+        if (!strcmp(k, "Ld")) { LinePID_SetKd(v1); UART_Printf(&g_uart0, "OK Ld=%.3f\r\n", v1); return; }
+        if (!strcmp(k, "Gp")) { GyroPID_SetKp(v1); UART_Printf(&g_uart0, "OK Gp=%.3f\r\n", v1); return; }
+        if (!strcmp(k, "Gi")) { GyroPID_SetKi(v1); UART_Printf(&g_uart0, "OK Gi=%.3f\r\n", v1); return; }
+        if (!strcmp(k, "Gd")) { GyroPID_SetKd(v1); UART_Printf(&g_uart0, "OK Gd=%.3f\r\n", v1); return; }
+    }
+    if (!strcmp(k, "mode")) {
+        int m;
+        if (sscanf(line, "mode %d", &m) == 1) {
+            Steering_SetMode((uint8_t)m);
+            UART_Printf(&g_uart0, "OK mode %s\r\n", m==0?"A(line)":"B(gyro)");
+        } else UART_Puts(&g_uart0, "ERR: mode 0(A/line) or 1(B/gyro)\r\n");
+        return;
+    }
+    if (!strcmp(k, "st")) {
+        if (sscanf(line, "st %f %f", &v1, &v2) == 2) {
+            trajectory_straight(v1, v2);
+            UART_Printf(&g_uart0, "OK st d=%.2f v=%.2f\r\n", v1, v2);
+        } else UART_Puts(&g_uart0, "ERR: st <dist_m> <speed_mps>\r\n");
+        return;
     }
 #endif
 
@@ -262,21 +295,25 @@ static void cmd_poll(void)
 }
 
 /* ==================================================================
- * 后续迁移: TIMG12 ISR (100Hz / 10ms) (暂注释)
+ * TIMG12 ISR (10ms) — 所有实时任务在此调度
  * ================================================================== */
-#if 0
-static volatile int g_fw_ready = 0;
-static volatile int g_fw_div    = 0;
 
 void TIMER_0_INST_IRQHandler(void)
 {
     motor_control_update();
-    trajectory_update();
-    g_imu_ready = 1;
-    if (++g_fw_div >= 5) { g_fw_div = 0; g_fw_ready = 1; }
-    DL_TimerG_clearInterruptStatus(TIMER_0_INST, DL_TIMERG_INTERRUPT_ZERO_EVENT);
+
+    if (g_is_calibrated) {
+        IMU_UpdateAttitude(&g_myCarAngle);
+    }
+
+    if (++g_fw_div >= 5) {
+        g_fw_div = 0;
+        if (g_fw_stream) g_fw_ready = 1;
+    }
+
+    DL_TimerG_clearInterruptStatus(TIMER_0_INST,
+        DL_TIMERG_INTERRUPT_ZERO_EVENT);
 }
-#endif
 
 /* ==================== Main ==================== */
 
@@ -290,13 +327,12 @@ int main(void)
 
     Grayscale_Init();
 
-    /* ---- IMU 初始化 ---- */
+    /* ---- IMU 初始化 (I2C 阻塞暂跳过) ----
     NVIC_SetPriority(I2C_GYRO_INST_INT_IRQN, 0);
     NVIC_EnableIRQ(I2C_GYRO_INST_INT_IRQN);
     DL_SYSCTL_disableSleepOnExit();
 
     if (MPU6500_Init()) {
-        /* ---- 滤波器初始化 ---- */
         Biquad_Init(&xFilter, 0.0133592f, 0.0267184f, 0.0133592f,
                     1.0f, -1.64745998f, 0.70089678f);
         Biquad_Init(&yFilter, 0.0133592f, 0.0267184f, 0.0133592f,
@@ -304,7 +340,6 @@ int main(void)
         Kalman2D_Init(&kfX, SAMPLE_DT);
         Kalman2D_Init(&kfY, SAMPLE_DT);
 
-        /* ---- Z 轴陀螺仪零偏校准 (保持静止) ---- */
         UART_Puts(&g_uart0, "Calibrating Z-Gyro, KEEP STILL...\r\n");
         float gyro_z_sum = 0.0f;
         int valid_samples = 0;
@@ -323,8 +358,18 @@ int main(void)
     } else {
         UART_Puts(&g_uart0, "MPU6500 FAIL\r\n");
     }
+    ---- */
 
-    /* 后续迁移: 电机 / 轨迹 初始化 (暂注释)
+    /* ---- 双电机初始化 ---- */
+    motor_control_init(1, 0.01f, 2.0f, 10.0f, 0.0f);
+    motor_control_init(2, 0.01f, 2.0f, 10.0f, 0.0f);
+
+    /* ---- 启动 10ms 定时器 ---- */
+    NVIC_ClearPendingIRQ(TIMER_0_INST_INT_IRQN);
+    NVIC_EnableIRQ(TIMER_0_INST_INT_IRQN);
+    DL_TimerG_startCounter(TIMER_0_INST);
+
+    /* 后续迁移: 轨迹 / 转向 / PID 初始化 (暂注释)
     Biquad_Init(&xFilter, ...);
     Kalman2D_Init(&kfX, SAMPLE_DT);
     motor_control_init(1, 0.01f, 2.0f, 10.0f, 0.0f);
@@ -337,14 +382,15 @@ int main(void)
     */
 
     UART_Puts(&g_uart0, "ttc2 ready\r\n");
+    UART_Puts(&g_uart0, "# M1_Tr,M1_RPM,M1_Duty,M1_Freq,M2_Tr,M2_RPM,M2_Duty,M2_Freq,Roll,Pitch,Yaw,Sensor[7:0]\r\n");
     cmd_show();
 
     while (1) {
         cmd_poll();
 
-        /* 后续迁移: IMU 姿态解算 + 定时上报
-        if (g_is_calibrated && g_imu_ready) { g_imu_ready = 0; IMU_UpdateAttitude(&g_myCarAngle); }
-        if (g_fw_ready) { g_fw_ready = 0; firewater_send(); }
-        */
+        if (g_fw_ready) {
+            g_fw_ready = 0;
+            firewater_send();
+        }
     }
 }
