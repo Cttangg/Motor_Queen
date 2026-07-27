@@ -1,0 +1,14 @@
+# Build outputs
+Debug/
+
+# Clangd cache
+.clangd
+
+# Generated documentation from README.md
+README.html
+
+# CCS/Eclipse workspace files (optional - you may choose to track these)
+.settings/
+.ccsproject
+.cproject
+.project
