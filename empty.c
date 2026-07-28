@@ -11,13 +11,10 @@
 #include "./Drivers/mpu6500.h"
 #include "./Drivers/filter.h"
 #include "./Drivers/motor_control.h"
-
-/* 后续迁移时取消注释:
 #include "./Drivers/trajectory.h"
 #include "./Drivers/steering.h"
 #include "./Drivers/line_pid.h"
 #include "./Drivers/gyro_pid.h"
-*/
 
 #include <stdio.h>
 #include <string.h>
@@ -150,7 +147,16 @@ static void firewater_send(void)
 
 static void cmd_show(void)
 {
-    UART_Puts(&g_uart0, "ttc2 CMD: ? gs imu udbg fw stop Tr Tr1/2 Dd Kp1/2\r\n");
+    UART_Printf(&g_uart0, "M1: Tr=%d RPM=%d D=%d F=%d\r\n",
+        (int)motor_control_get_target_rpm(1),
+        (int)motor_control_get_actual_rpm(1),
+        (int)motor_control_get_duty(1),
+        (int)motor_control_get_freq(1));
+    UART_Printf(&g_uart0, "M2: Tr=%d RPM=%d D=%d F=%d\r\n",
+        (int)motor_control_get_target_rpm(2),
+        (int)motor_control_get_actual_rpm(2),
+        (int)motor_control_get_duty(2),
+        (int)motor_control_get_freq(2));
 }
 
 static void cmd_do(const char *line)
@@ -162,35 +168,156 @@ static void cmd_do(const char *line)
     if (line[0] == '\0') return;
     sscanf(line, "%15s", k);
 
-    if (!strcmp(k, "?")) { cmd_show(); return; }
-
+    if (!strcmp(k, "?"))        { cmd_show(); return; }
+    if (!strcmp(k, "stop_all")) { trajectory_stop(); UART_Puts(&g_uart0, "OK all stopped\r\n"); return; }
     if (!strcmp(k, "gs")) {
-        uint8_t s = Grayscale_Read();
-        char b[9];
+        uint8_t s = Grayscale_Read(); char b[9];
         for (int i = 7; i >= 0; i--) b[7 - i] = (s & (1 << i)) ? '1' : '0';
         b[8] = '\0';
         UART_Printf(&g_uart0, "GS=%s\r\n", b);
         return;
     }
-    if (!strcmp(k, "udbg")) { UART_DumpDebug(&g_uart0); return; }
 
+    /* ---- IMU (待 I2C 修复) ----
     if (!strcmp(k, "imu")) {
-        if (!g_is_calibrated) {
-            UART_Puts(&g_uart0, "IMU not calibrated\r\n");
-            return;
-        }
-        IMU_UpdateAttitude(&g_myCarAngle);
-        UART_Printf(&g_uart0,
-            "Roll: %.2f  Pitch: %.2f  Yaw: %.2f deg  YawRate: %.2f deg/s\r\n",
+        UART_Printf(&g_uart0, "Roll: %.2f deg, Pitch: %.2f deg, Yaw: %.2f deg, YawRate: %.2f deg/s\r\n",
             g_myCarAngle.roll, g_myCarAngle.pitch, g_myCarAngle.yaw, g_yaw_rate);
         return;
     }
+    ---- */
+
+    if (!strcmp(k, "udbg")) { UART_DumpDebug(&g_uart0); return; }
 
     if (!strcmp(k, "fw")) {
         g_fw_stream = !g_fw_stream;
         UART_Printf(&g_uart0, "Stream %s\r\n", g_fw_stream ? "ON" : "OFF");
         return;
     }
+
+    if (sscanf(line, "%*s %f", &v1) >= 1) {
+        if (!strcmp(k, "Lp")) { LinePID_SetKp(v1); UART_Printf(&g_uart0, "OK Lp=%.3f\r\n", v1); return; }
+        if (!strcmp(k, "Li")) { LinePID_SetKi(v1); UART_Printf(&g_uart0, "OK Li=%.3f\r\n", v1); return; }
+        if (!strcmp(k, "Ld")) { LinePID_SetKd(v1); UART_Printf(&g_uart0, "OK Ld=%.3f\r\n", v1); return; }
+#if 0 /* ---- 陀螺仪 PID (待 I2C) ---- */
+        if (!strcmp(k, "Gp")) { GyroPID_SetKp(v1); UART_Printf(&g_uart0, "OK Gp=%.3f\r\n", v1); return; }
+        if (!strcmp(k, "Gi")) { GyroPID_SetKi(v1); UART_Printf(&g_uart0, "OK Gi=%.3f\r\n", v1); return; }
+        if (!strcmp(k, "Gd")) { GyroPID_SetKd(v1); UART_Printf(&g_uart0, "OK Gd=%.3f\r\n", v1); return; }
+#endif
+    }
+    if (!strcmp(k, "mode")) {
+        int m;
+        if (sscanf(line, "mode %d", &m) == 1) {
+            Steering_SetMode((uint8_t)m);
+            UART_Printf(&g_uart0, "OK mode %s\r\n", m==0?"A(line)":"B(gyro)");
+        } else UART_Puts(&g_uart0, "ERR: mode 0(A/line) or 1(B/gyro)\r\n");
+        return;
+    }
+
+#if 0 /* ---- 陀螺仪诊断 & 航向锁定 (待 I2C) ---- */
+    if (!strcmp(k, "diag")) {
+        UART_Printf(&g_uart0, "YAW=%.2f CORR=%.3f HEAD=%.3f LOCK=%d\r\n",
+            GyroPID_GetLastYawRate(), GyroPID_GetLastCorrection(),
+            GyroPID_GetHeading(), 1);
+        return;
+    }
+#endif
+    if (sscanf(line, "%*s %f", &v1) >= 1) {
+#if 0 /* ---- 航向锁定 (待 I2C) ---- */
+        if (!strcmp(k, "Gh")) { GyroPID_SetHeadingKp(v1); UART_Printf(&g_uart0, "OK Gh=%.3f\r\n", v1); return; }
+        if (!strcmp(k, "Gi_h")) { GyroPID_SetHeadingKi(v1); UART_Printf(&g_uart0, "OK Gi_h=%.3f\r\n", v1); return; }
+#endif
+    }
+#if 0 /* ---- 航向锁定 (待 I2C) ---- */
+    if (!strcmp(k, "lock")) {
+        int en;
+        if (sscanf(line, "lock %d", &en) == 1) {
+            GyroPID_EnableHeadingLock((uint8_t)en);
+            UART_Printf(&g_uart0, "OK heading lock %s\r\n", en?"ON":"OFF");
+        } else UART_Puts(&g_uart0, "ERR: lock 1(on) or 0(off)\r\n");
+        return;
+    }
+#endif
+
+    if (!strcmp(k, "st")) {
+        if (sscanf(line, "st %f %f", &v1, &v2) == 2) {
+            trajectory_straight(v1, v2);
+            UART_Printf(&g_uart0, "OK st d=%.2f v=%.2f\r\n", v1, v2);
+        } else UART_Puts(&g_uart0, "ERR: st <dist_m> <speed_mps>\r\n");
+        return;
+    }
+    if (!strcmp(k, "arc")) {
+        if (sscanf(line, "arc %f %f %f %d", &v1, &v2, &v3, &dir) == 4) {
+            trajectory_arc(v1, v2, v3, dir);
+            UART_Printf(&g_uart0, "OK arc R=%.2f th=%.2f v=%.2f d=%d\r\n", v1, v2, v3, dir);
+        } else UART_Puts(&g_uart0, "ERR: arc <R_m> <th_rad> <spd> <dir>\r\n");
+        return;
+    }
+    if (!strcmp(k, "cir")) {
+        if (sscanf(line, "cir %f %f %d", &v1, &v2, &dir) == 3) {
+            trajectory_circle(v1, v2, dir);
+            UART_Printf(&g_uart0, "OK cir R=%.2f v=%.2f d=%d\r\n", v1, v2, dir);
+        } else UART_Puts(&g_uart0, "ERR: cir <R_m> <spd> <dir>\r\n");
+        return;
+    }
+    if (!strcmp(k, "lf")) {
+        if (sscanf(line, "lf %f", &v1) == 1) {
+            trajectory_linefollow(v1);
+            UART_Printf(&g_uart0, "OK lf v=%.2f\r\n", v1);
+        } else UART_Puts(&g_uart0, "ERR: lf <speed_mps>\r\n");
+        return;
+    }
+    if (!strcmp(k, "rot")) {
+        if (sscanf(line, "rot %f %f %d", &v1, &v2, &dir) == 3) {
+            trajectory_rotate(v1, v2, dir);
+            UART_Printf(&g_uart0, "OK rot th=%.2f v=%.2f d=%d\r\n", v1, v2, dir);
+        } else UART_Puts(&g_uart0, "ERR: rot <theta_rad> <speed> <dir>\r\n");
+        return;
+    }
+
+    if (!strcmp(k, "mix1")) { trajectory_mix1(); UART_Puts(&g_uart0, "OK mix1 started\r\n"); return; }
+
+    if (!strcmp(k, "st_open")) {
+        if (sscanf(line, "st_open %f %f", &v1, &v2) == 2) {
+            trajectory_straight_openloop(v1, v2);
+            UART_Printf(&g_uart0, "OK openloop d=%.2f v=%.2f\r\n", v1, v2);
+        } else UART_Puts(&g_uart0, "ERR: st_open <dist> <speed>\r\n");
+        return;
+    }
+    if (!strcmp(k, "arc_open")) {
+        if (sscanf(line, "arc_open %f %f %f %d", &v1, &v2, &v3, &dir) == 4) {
+            trajectory_arc_openloop(v1, v2, v3, dir);
+            UART_Printf(&g_uart0, "OK arc_open R=%.2f th=%.2f v=%.2f d=%d\r\n", v1, v2, v3, dir);
+        } else UART_Puts(&g_uart0, "ERR: arc_open <R_m> <th_rad> <spd> <dir>\r\n");
+        return;
+    }
+    if (!strcmp(k, "cir_open")) {
+        if (sscanf(line, "cir_open %f %f %d", &v1, &v2, &dir) == 3) {
+            trajectory_circle_openloop(v1, v2, dir);
+            UART_Printf(&g_uart0, "OK cir_open R=%.2f v=%.2f d=%d\r\n", v1, v2, dir);
+        } else UART_Puts(&g_uart0, "ERR: cir_open <R_m> <spd> <dir>\r\n");
+        return;
+    }
+    if (!strcmp(k, "rot_open")) {
+        if (sscanf(line, "rot_open %f %f %d", &v1, &v2, &dir) == 3) {
+            trajectory_rotate_openloop(v1, v2, dir);
+            UART_Printf(&g_uart0, "OK rot_open th=%.2f v=%.2f d=%d\r\n", v1, v2, dir);
+        } else UART_Puts(&g_uart0, "ERR: rot_open <theta_rad> <speed> <dir>\r\n");
+        return;
+    }
+
+#if 0 /* ---- 陀螺仪漂移 (待 I2C) ---- */
+    if (!strcmp(k, "odrift")) {
+        if (sscanf(line, "odrift %f", &v1) == 1) {
+            GyroPID_SetDriftOffset(v1);
+            UART_Printf(&g_uart0, "OK drift offset=%.2f\r\n", v1);
+        } else UART_Puts(&g_uart0, "ERR: odrift <value_deg_s>\r\n");
+        return;
+    }
+    if (!strcmp(k, "drift")) {
+        UART_Printf(&g_uart0, "DRIFT=%.2f deg/s\r\n", GyroPID_GetDriftOffset());
+        return;
+    }
+#endif
 
     if (!strcmp(k, "stop")) {
         motor_control_stop(1); motor_control_stop(2);
@@ -213,7 +340,6 @@ static void cmd_do(const char *line)
         return;
     }
 
-    /* 单电机命令解析 (Tr1/Tr2, Kp1/Kp2, Dd1/Dd2, stop1/stop2) */
     {
         int len = (int)strlen(k);
         int id = 0;
@@ -246,38 +372,7 @@ static void cmd_do(const char *line)
             motor_control_stop((uint8_t)id);
             UART_Printf(&g_uart0, "OK M%d stopped\r\n", id);
         } else { UART_Printf(&g_uart0, "ERR: %s\r\n", k); }
-        return;
     }
-
-    /* ============ 后续迁移: 轨迹 / 转向 / PID 命令 (暂注释) ============ */
-#if 0
-    if (!strcmp(k, "stop_all")) { trajectory_stop(); UART_Puts(&g_uart0, "OK all stopped\r\n"); return; }
-    if (sscanf(line, "%*s %f", &v1) >= 1) {
-        if (!strcmp(k, "Lp")) { LinePID_SetKp(v1); UART_Printf(&g_uart0, "OK Lp=%.3f\r\n", v1); return; }
-        if (!strcmp(k, "Li")) { LinePID_SetKi(v1); UART_Printf(&g_uart0, "OK Li=%.3f\r\n", v1); return; }
-        if (!strcmp(k, "Ld")) { LinePID_SetKd(v1); UART_Printf(&g_uart0, "OK Ld=%.3f\r\n", v1); return; }
-        if (!strcmp(k, "Gp")) { GyroPID_SetKp(v1); UART_Printf(&g_uart0, "OK Gp=%.3f\r\n", v1); return; }
-        if (!strcmp(k, "Gi")) { GyroPID_SetKi(v1); UART_Printf(&g_uart0, "OK Gi=%.3f\r\n", v1); return; }
-        if (!strcmp(k, "Gd")) { GyroPID_SetKd(v1); UART_Printf(&g_uart0, "OK Gd=%.3f\r\n", v1); return; }
-    }
-    if (!strcmp(k, "mode")) {
-        int m;
-        if (sscanf(line, "mode %d", &m) == 1) {
-            Steering_SetMode((uint8_t)m);
-            UART_Printf(&g_uart0, "OK mode %s\r\n", m==0?"A(line)":"B(gyro)");
-        } else UART_Puts(&g_uart0, "ERR: mode 0(A/line) or 1(B/gyro)\r\n");
-        return;
-    }
-    if (!strcmp(k, "st")) {
-        if (sscanf(line, "st %f %f", &v1, &v2) == 2) {
-            trajectory_straight(v1, v2);
-            UART_Printf(&g_uart0, "OK st d=%.2f v=%.2f\r\n", v1, v2);
-        } else UART_Puts(&g_uart0, "ERR: st <dist_m> <speed_mps>\r\n");
-        return;
-    }
-#endif
-
-    UART_Printf(&g_uart0, "ERR: unknown '%s'\r\n", k);
 }
 
 static void cmd_poll(void)
@@ -301,6 +396,7 @@ static void cmd_poll(void)
 void TIMER_0_INST_IRQHandler(void)
 {
     motor_control_update();
+    trajectory_update();
 
     if (g_is_calibrated) {
         IMU_UpdateAttitude(&g_myCarAngle);
@@ -364,22 +460,15 @@ int main(void)
     motor_control_init(1, 0.01f, 2.0f, 10.0f, 0.0f);
     motor_control_init(2, 0.01f, 2.0f, 10.0f, 0.0f);
 
+    /* ---- 轨迹/转向/PID 初始化 ---- */
+    Steering_Init();
+    trajectory_set_feedback(Steering_GetCorrection);
+    trajectory_enable_closed_loop(1);
+
     /* ---- 启动 10ms 定时器 ---- */
     NVIC_ClearPendingIRQ(TIMER_0_INST_INT_IRQN);
     NVIC_EnableIRQ(TIMER_0_INST_INT_IRQN);
     DL_TimerG_startCounter(TIMER_0_INST);
-
-    /* 后续迁移: 轨迹 / 转向 / PID 初始化 (暂注释)
-    Biquad_Init(&xFilter, ...);
-    Kalman2D_Init(&kfX, SAMPLE_DT);
-    motor_control_init(1, 0.01f, 2.0f, 10.0f, 0.0f);
-    motor_control_init(2, 0.01f, 2.0f, 10.0f, 0.0f);
-    NVIC_EnableIRQ(TIMER_0_INST_INT_IRQN);
-    DL_TimerG_startCounter(TIMER_0_INST);
-    Steering_Init();
-    trajectory_set_feedback(Steering_GetCorrection);
-    trajectory_enable_closed_loop(1);
-    */
 
     UART_Puts(&g_uart0, "ttc2 ready\r\n");
     UART_Puts(&g_uart0, "# M1_Tr,M1_RPM,M1_Duty,M1_Freq,M2_Tr,M2_RPM,M2_Duty,M2_Freq,Roll,Pitch,Yaw,Sensor[7:0]\r\n");
