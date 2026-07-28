@@ -35,7 +35,7 @@ static volatile steering_request_t g_request = STEER_REQ_NONE;
 
 void Steering_Init(void)
 {
-    LinePID_Init(0.05f, 0.05f, 0.0f);
+    LinePID_Init(0.09f, 0.05f, 0.003f);// for lf 0.7
     GyroPID_Init(0.5f, 0.02f, 0.0f);
     GyroPID_EnableHeadingLock(1);
     Gyro_Init();
