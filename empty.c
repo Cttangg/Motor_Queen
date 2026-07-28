@@ -395,8 +395,10 @@ static void cmd_poll(void)
 
 void TIMER_0_INST_IRQHandler(void)
 {
-    motor_control_update();
+    Steering_Poll();
+    trajectory_recovery_update();
     trajectory_update();
+    motor_control_update();
 
     if (g_is_calibrated) {
         IMU_UpdateAttitude(&g_myCarAngle);

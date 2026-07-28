@@ -1,0 +1,45 @@
+继续优化当前实现：
+
+1. 将 TIMER ISR 中 recovery_phase 状态机移出。
+ISR只能:
+- Steering_Poll()
+- 设置flag
+- trajectory_update()
+- motor_control_update()
+
+恢复逻辑放到主循环或trajectory模块。
+
+
+2. 将 recovery_phase/stable_ticks 从 empty.c 移入 trajectory.c。
+
+
+3. 调整执行顺序：
+
+Steering_Poll()
+recovery_update()
+trajectory_update()
+motor_control_update()
+
+
+4. 增加真正BRAKE阶段：
+失线后：
+100ms停止输出
+之后才启动recovery_rotate。
+
+
+5. 检查trajectory_stop_recovery_rotate():
+必须只停止恢复旋转，
+不能调用trajectory_stop(),
+不能清空原trajectory状态。
+
+
+6. 检查trajectory.c:
+确认不存在LinePID_Update直接调用。
+所有循迹修正只能来自feedback。
+
+
+7. 最终输出:
+- Steering状态图
+- Trajectory状态图
+- Recovery状态图
+- ISR执行时间估计
